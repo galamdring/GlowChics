@@ -1,31 +1,18 @@
 package main
 
 import (
-	// "github.com/aykevl/ledsgo"
 	"image/color"
-	"image/color/palette"
 	"machine"
 	"math/rand"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/aykevl/ledsgo"
 	"tinygo.org/x/drivers/ws2812"
 )
 
-var brightnessAdjustPercentage uint32 = 20
-
-func getRGBA(rgb color.Color) color.RGBA {
-	R, G, B, _ := rgb.RGBA()
-	adR := uint8((R * brightnessAdjustPercentage) / 100)
-	adG := uint8((G * brightnessAdjustPercentage) / 100)
-	adB := uint8((B * brightnessAdjustPercentage) / 100)
-	return color.RGBA{
-		R: adR,
-		G: adG,
-		B: adB,
-		A: 0,
-	}
-}
+var ALPHA = uint8(64)
 
 func microcontrollerTimeString() string {
 	return time.Now().Format("15:04:05.00000")
@@ -54,13 +41,14 @@ var currentIteration = 0
 var maxIteration = 24
 
 func (l *Letter) UpdateColors() {
-	colorId := rand.Int() % len(currentPalette)
-	ourColor := currentPalette[colorId]
-	rgba := getRGBA(ourColor)
+	colorId := uint16(rand.Uint32()  >> 8)
+	rgba := currentPalette.ColorAt(colorId)
+	rgba = ledsgo.ApplyAlpha(rgba, ALPHA)
 	if l.SinceBlink == currentIteration {
-		rgba = getRGBA(ledsgo.Black)
+		rgba = ledsgo.Black
 		WriteStringSerial("Blinking ", l.Identifier, " iterCount: ", strconv.Itoa(l.SinceBlink), " currentIter: ", strconv.Itoa(currentIteration))
 	}
+
 	l.Color = rgba
 
 	err := l.Column.Device.WriteColors(LettersColors(l.Column.Letters)[:])
@@ -101,7 +89,7 @@ func partialColorString(name string, val int) string {
 func LettersColors(lets []*Letter) []color.RGBA {
 	var arr []color.RGBA
 	for _, let := range lets {
-		arr = SetLeds(arr, let.Offset, let.Count, getRGBA(let.Color))
+		arr = SetLeds(arr, let.Offset, let.Count, let.Color)
 	}
 	return arr
 }
@@ -113,7 +101,12 @@ func SetLeds(arr []color.RGBA, offset, count int, ledColor color.RGBA) []color.R
 		}
 	}
 	for i := 0; i < count; i++ {
-		arr = append(arr, ledColor)
+		c := ledColor
+		if USE_NOISE{
+			hue := ledsgo.Noise2(uint32(time.Now().UnixNano() >> 22) , uint32(i))
+			c = ledsgo.ApplyAlpha(ledsgo.Color{hue, 0xff, 0xff}.Spectrum(), ALPHA)
+		}
+		arr = append(arr, c)
 	}
 	return arr
 }
@@ -125,7 +118,7 @@ func InitLetters(columnsMap map[machine.Pin][]Letter) {
 		thePin.Configure(machine.PinConfig{Mode: machine.PinOutput})
 		theWS := ws2812.New(thePin)
 		col := &Column{Device: theWS}
-		for l, _ := range letters {
+		for l := range letters {
 			let := letters[l]
 			let.Column = col
 			col.Letters = append(col.Letters, &let)
@@ -154,7 +147,7 @@ type Column struct {
 
 type Letter struct {
 	Identifier string
-	Color      color.Color
+	Color      color.RGBA
 	Offset     int
 	Count      int
 	SinceBlink int
@@ -171,6 +164,10 @@ func getRand() uint8 {
 
 }
 
+func toggleUseNoise() {
+	USE_NOISE = !USE_NOISE
+}
+
 func main() {
 	machine.InitSerial()
 	InitLetters(allTheLetters)
@@ -182,6 +179,9 @@ func main() {
 	paletteTicker := time.NewTicker(time.Second * 60)
 	defer paletteTicker.Stop()
 
+	noiseTicker := time.NewTicker(time.Second * 120)
+	defer noiseTicker.Stop()
+
 	for {
 		select {
 		case <-iterTicker.C:
@@ -192,85 +192,70 @@ func main() {
 			if next >= len(palettes) {
 				next = 0
 			}
+
+		case <-noiseTicker.C:
+			toggleUseNoise()
+
 		}
 	}
 }
 
-func getRandomColors() color.Palette {
-	var lotsOfColors color.Palette
-	_ = palette.WebSafe
-	for range make([]struct{}, 254) {
-		R := getRand()
-		G := getRand()
-		B := getRand()
-		lotsOfColors = append(lotsOfColors,
-			color.RGBA{
-				R: R / 2,
-				G: G / 2,
-				B: B / 2,
-			})
-	}
-	return lotsOfColors
+var USE_NOISE = false
+
+var currentPalette ledsgo.Palette16
+
+var colors = ledsgo.Palette16{
+	ledsgo.AliceBlue,
+	ledsgo.Blue,  // blue
+	ledsgo.Red,   // red
+	ledsgo.Azure, // purple
+	ledsgo.Chartreuse,
+	ledsgo.Black,
+	ledsgo.AntiqueWhite, // Light white?
+	ledsgo.Amethyst,
+	ledsgo.AliceBlue,
+	ledsgo.Blue,  // blue
+	ledsgo.Red,   // red
+	ledsgo.Azure, // purple
+	ledsgo.Chartreuse,
+	ledsgo.Black,
+	ledsgo.AntiqueWhite, // Light white?
+	ledsgo.Amethyst,     // purple?
 }
 
-var currentPalette []color.Color
-var notSoDamnBright = uint8(0x6f)
-var blinkingYellowPalette = color.Palette{
-	color.RGBA{R: notSoDamnBright, G: notSoDamnBright, B: 0, A: 0},
-	// color.RGBA{R: 0, G: 0, B: 0, A: 0},
-	color.RGBA{R: notSoDamnBright, G: notSoDamnBright, B: 0, A: 0},
-	// color.RGBA{R: 0, G: 0, B: 0, A: 0},
-	color.RGBA{R: notSoDamnBright, G: notSoDamnBright, B: 0, A: 0},
-	// color.RGBA{R: 0, G: 0, B: 0, A: 0},
-	color.RGBA{R: notSoDamnBright, G: notSoDamnBright, B: 0, A: 0},
-	color.RGBA{R: 0, G: 0, B: 0, A: 0},
+var bluePalette = ledsgo.Palette16{
+	ledsgo.DarkBlue,
+	ledsgo.DarkBlue,
+	ledsgo.DarkBlue,
+	ledsgo.DarkBlue,
+	ledsgo.DarkBlue,
+	ledsgo.DarkBlue,
+	ledsgo.DarkBlue,
+	ledsgo.DarkBlue,
+	ledsgo.Black,
+	ledsgo.Black,
+	ledsgo.DarkBlue,
+	ledsgo.DarkBlue,
+	ledsgo.DarkBlue,
+	ledsgo.DarkBlue,
+	ledsgo.DarkBlue,
+	ledsgo.Black,
 }
 
-var colors = []color.Color{
-	color.White,
-	color.RGBA{R: 0, G: 0, B: 0xaa},    // blue
-	color.RGBA{R: 0xaa, G: 0, B: 0},    // red
-	color.RGBA{R: 0xaa, G: 0xaa, B: 0}, // purple
-	color.RGBA{R: 0xaa, G: 0, B: 0xaa}, // yellow
-	color.Black,
-	color.RGBA{R: 0x66, G: 0x66, B: 0x66}, // Light white?
-	color.RGBA{R: 0x55, G: 0, B: 0x75},    // purple?
-}
-
-var bluePalette = color.Palette{
-	color.RGBA{R: 36, G: 2, B: 230, A: 0},
-	color.RGBA{R: 36, G: 2, B: 230, A: 0},
-	color.RGBA{R: 36, G: 2, B: 230, A: 0},
-	color.RGBA{R: 36, G: 2, B: 230, A: 0},
-	color.RGBA{R: 36, G: 2, B: 230, A: 0},
-	color.Black,
-	color.Black,
-}
-
-var dimPalette = color.Palette{
-	color.RGBA{R: 1, G: 2, B: 3, A: 255},
-	color.RGBA{R: 1, G: 2, B: 3, A: 150},
-	color.RGBA{R: 1, G: 2, B: 3, A: 50},
-	color.RGBA{R: 1, G: 2, B: 3, A: 1},
-	color.RGBA{R: 1, G: 2, B: 3, A: 1},
-	color.Black,
-	color.Black,
-}
-
-var palettes = []color.Palette{
-	// colors,
-	// palette.Plan9,
-	// blinkingYellowPalette,
-	// palette.WebSafe,
-	// bluePalette,
-	dimPalette,
+var palettes = []ledsgo.Palette16{
+	colors,
+	bluePalette,
+	ledsgo.LavaColors,
+	ledsgo.CloudColors,
+	ledsgo.ForestColors,
+	ledsgo.HeatColors,
 }
 
 var allTheLetters = map[machine.Pin][]Letter{
 	machine.GP0: {
 		{
 			Identifier: "G",
-			Color:      color.RGBA{R: 0, G: 0, B: 0, A: 0},
+			Color:      ledsgo.Black,
 			Offset:     0,
 			Count:      14,
 			SinceBlink: 1,
@@ -278,7 +263,7 @@ var allTheLetters = map[machine.Pin][]Letter{
 		},
 		{
 			Identifier: "C",
-			Color:      color.RGBA{R: 0, G: 0, B: 0, A: 0},
+			Color:      ledsgo.Black,
 			Offset:     14,
 			Count:      14,
 			SinceBlink: 5,
@@ -288,7 +273,7 @@ var allTheLetters = map[machine.Pin][]Letter{
 	machine.GP2: {
 		{
 			Identifier: "L",
-			Color:      color.RGBA{R: 0, G: 0, B: 0, A: 0},
+			Color:      ledsgo.Black,
 			Offset:     0,
 			Count:      8,
 			SinceBlink: 2,
@@ -296,7 +281,7 @@ var allTheLetters = map[machine.Pin][]Letter{
 		},
 		{
 			Identifier: "H",
-			Color:      color.RGBA{R: 0, G: 0, B: 0, A: 0},
+			Color:      ledsgo.Black,
 			Offset:     8,
 			Count:      13,
 			SinceBlink: 6,
@@ -306,7 +291,7 @@ var allTheLetters = map[machine.Pin][]Letter{
 	machine.GP4: {
 		{
 			Identifier: "O",
-			Color:      color.RGBA{R: 0, G: 0, B: 0, A: 0},
+			Color:      ledsgo.Black,
 			Offset:     0,
 			Count:      14,
 			SinceBlink: 3,
@@ -314,7 +299,7 @@ var allTheLetters = map[machine.Pin][]Letter{
 		},
 		{
 			Identifier: "I",
-			Color:      color.RGBA{R: 0, G: 0, B: 0, A: 0},
+			Color:      ledsgo.Black,
 			Offset:     14,
 			Count:      10,
 			SinceBlink: 7,
@@ -324,7 +309,7 @@ var allTheLetters = map[machine.Pin][]Letter{
 	machine.GP6: {
 		{
 			Identifier: "W",
-			Color:      color.RGBA{R: 0, G: 0, B: 0, A: 0},
+			Color:      ledsgo.Black,
 			Offset:     0,
 			Count:      14,
 			SinceBlink: 4,
@@ -332,7 +317,7 @@ var allTheLetters = map[machine.Pin][]Letter{
 		},
 		{
 			Identifier: "C2",
-			Color:      color.RGBA{R: 0, G: 0, B: 0, A: 0},
+			Color:      ledsgo.Black,
 			Offset:     14,
 			Count:      11,
 			SinceBlink: 8,
