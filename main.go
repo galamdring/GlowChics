@@ -3,7 +3,6 @@ package main
 import (
 	"image/color"
 	"machine"
-	"math/rand"
 	"strconv"
 	"strings"
 	"time"
@@ -41,15 +40,13 @@ var currentIteration = 0
 var maxIteration = 24
 
 func (l *Letter) UpdateColors() {
-	colorId := uint16(rand.Uint32()  >> 8)
-	rgba := currentPalette.ColorAt(colorId)
-	rgba = ledsgo.ApplyAlpha(rgba, ALPHA)
+	//colorId := uint16(rand.Uint32() >> 8)
+	//rgba := currentPalette.ColorAt(colorId)
+	l.Color = ledsgo.White
 	if l.SinceBlink == currentIteration {
-		rgba = ledsgo.Black
+		l.Color = ledsgo.Black
 		WriteStringSerial("Blinking ", l.Identifier, " iterCount: ", strconv.Itoa(l.SinceBlink), " currentIter: ", strconv.Itoa(currentIteration))
 	}
-
-	l.Color = rgba
 
 	err := l.Column.Device.WriteColors(LettersColors(l.Column.Letters)[:])
 	if err != nil {
@@ -89,26 +86,50 @@ func partialColorString(name string, val int) string {
 func LettersColors(lets []*Letter) []color.RGBA {
 	var arr []color.RGBA
 	for _, let := range lets {
-		arr = SetLeds(arr, let.Offset, let.Count, let.Color)
+		arr = SetLeds(arr, let.Offset, let.Count, let.Color, let.Identifier)
 	}
 	return arr
 }
 
-func SetLeds(arr []color.RGBA, offset, count int, ledColor color.RGBA) []color.RGBA {
+func IsBlack(ledColor color.RGBA) bool {
+	return ledColor.B == 0 && ledColor.G == 0 && ledColor.R == 0
+}
+
+func SetLeds(arr []color.RGBA, offset, count int, ledColor color.RGBA, letName string) []color.RGBA {
 	if offset > len(arr) {
 		for i := len(arr); i < offset; i++ {
 			arr = append(arr, color.RGBA{R: 0, G: 0, B: 0, A: 0})
 		}
 	}
+	c := ledColor
+
+	if !IsBlack(c) {
+		// Get a noise value!
+		hue := ledsgo.Noise2(uint32(time.Now().UnixNano()>>22), uint32(byte(letName[0]))*getRandomUint32())
+		c = ledsgo.ApplyAlpha(ledsgo.Color{hue, 0xff, 0xff}.Spectrum(), ALPHA)
+	}
+	// WriteStringSerial(colorString(c))
+
 	for i := 0; i < count; i++ {
-		c := ledColor
-		if USE_NOISE{
-			hue := ledsgo.Noise2(uint32(time.Now().UnixNano() >> 22) , uint32(i))
-			c = ledsgo.ApplyAlpha(ledsgo.Color{hue, 0xff, 0xff}.Spectrum(), ALPHA)
-		}
 		arr = append(arr, c)
 	}
 	return arr
+}
+
+func getRandomUint32() uint32 {
+	rand, err := machine.GetRNG()
+	if err != nil {
+		WriteStringSerial(err.Error())
+	}
+	return rand
+}
+
+func randIntBetween(min,max int) int {
+	rand := int(getRandomUint32())
+	if rand < min || rand > max {
+		return randIntBetween(min, max)
+	}
+	return rand
 }
 
 // InitLetters will create one column for each pin supplied, and set them to output
@@ -128,7 +149,10 @@ func InitLetters(columnsMap map[machine.Pin][]Letter) {
 }
 
 func RunTicker(l *Letter) {
-	ticker := time.NewTicker(l.WaitTime)
+	min := 250 * int(time.Millisecond)
+	max := 1000 * int(time.Millisecond)
+	rand := randIntBetween(min,max)
+	ticker := time.NewTicker(time.Duration(rand))
 	go func() {
 		defer ticker.Stop()
 		for {
@@ -155,100 +179,23 @@ type Letter struct {
 	WaitTime   time.Duration
 }
 
-func getRand() uint8 {
-	n := rand.Int()
-	if n > 255 {
-		return uint8(n % 255)
-	}
-	return uint8(n)
-
-}
-
-func toggleUseNoise() {
-	USE_NOISE = !USE_NOISE
-}
-
 func main() {
 	machine.InitSerial()
 	InitLetters(allTheLetters)
+	min := 250 * int(time.Millisecond)
+	max := 1000 * int(time.Millisecond)
+	rand := randIntBetween(min,max)
+	WriteStringSerial(strconv.Itoa(int(rand)))
 
-	currentPalette = palettes[0]
-	next := 1
-	iterTicker := time.NewTicker(time.Millisecond * 250)
+	iterTicker := time.NewTicker(time.Duration(rand))
 	defer iterTicker.Stop()
-	paletteTicker := time.NewTicker(time.Second * 60)
-	defer paletteTicker.Stop()
-
-	noiseTicker := time.NewTicker(time.Second * 120)
-	defer noiseTicker.Stop()
 
 	for {
 		select {
 		case <-iterTicker.C:
 			incrementCurrentIteration()
-		case <-paletteTicker.C:
-			currentPalette = palettes[next]
-			next++
-			if next >= len(palettes) {
-				next = 0
-			}
-
-		case <-noiseTicker.C:
-			toggleUseNoise()
-
 		}
 	}
-}
-
-var USE_NOISE = false
-
-var currentPalette ledsgo.Palette16
-
-var colors = ledsgo.Palette16{
-	ledsgo.AliceBlue,
-	ledsgo.Blue,  // blue
-	ledsgo.Red,   // red
-	ledsgo.Azure, // purple
-	ledsgo.Chartreuse,
-	ledsgo.Black,
-	ledsgo.AntiqueWhite, // Light white?
-	ledsgo.Amethyst,
-	ledsgo.AliceBlue,
-	ledsgo.Blue,  // blue
-	ledsgo.Red,   // red
-	ledsgo.Azure, // purple
-	ledsgo.Chartreuse,
-	ledsgo.Black,
-	ledsgo.AntiqueWhite, // Light white?
-	ledsgo.Amethyst,     // purple?
-}
-
-var bluePalette = ledsgo.Palette16{
-	ledsgo.DarkBlue,
-	ledsgo.DarkBlue,
-	ledsgo.DarkBlue,
-	ledsgo.DarkBlue,
-	ledsgo.DarkBlue,
-	ledsgo.DarkBlue,
-	ledsgo.DarkBlue,
-	ledsgo.DarkBlue,
-	ledsgo.Black,
-	ledsgo.Black,
-	ledsgo.DarkBlue,
-	ledsgo.DarkBlue,
-	ledsgo.DarkBlue,
-	ledsgo.DarkBlue,
-	ledsgo.DarkBlue,
-	ledsgo.Black,
-}
-
-var palettes = []ledsgo.Palette16{
-	colors,
-	bluePalette,
-	ledsgo.LavaColors,
-	ledsgo.CloudColors,
-	ledsgo.ForestColors,
-	ledsgo.HeatColors,
 }
 
 var allTheLetters = map[machine.Pin][]Letter{
@@ -257,17 +204,15 @@ var allTheLetters = map[machine.Pin][]Letter{
 			Identifier: "G",
 			Color:      ledsgo.Black,
 			Offset:     0,
-			Count:      14,
+			Count:      15,
 			SinceBlink: 1,
-			WaitTime:   time.Millisecond * 250,
 		},
 		{
 			Identifier: "C",
 			Color:      ledsgo.Black,
-			Offset:     14,
-			Count:      14,
+			Offset:     15,
+			Count:      11,
 			SinceBlink: 5,
-			WaitTime:   time.Millisecond * 255,
 		},
 	},
 	machine.GP2: {
@@ -277,7 +222,6 @@ var allTheLetters = map[machine.Pin][]Letter{
 			Offset:     0,
 			Count:      8,
 			SinceBlink: 2,
-			WaitTime:   time.Millisecond * 240,
 		},
 		{
 			Identifier: "H",
@@ -285,7 +229,6 @@ var allTheLetters = map[machine.Pin][]Letter{
 			Offset:     8,
 			Count:      13,
 			SinceBlink: 6,
-			WaitTime:   time.Millisecond * 245,
 		},
 	},
 	machine.GP4: {
@@ -295,7 +238,6 @@ var allTheLetters = map[machine.Pin][]Letter{
 			Offset:     0,
 			Count:      14,
 			SinceBlink: 3,
-			WaitTime:   time.Millisecond * 230,
 		},
 		{
 			Identifier: "I",
@@ -303,7 +245,6 @@ var allTheLetters = map[machine.Pin][]Letter{
 			Offset:     14,
 			Count:      10,
 			SinceBlink: 7,
-			WaitTime:   time.Millisecond * 235,
 		},
 	},
 	machine.GP6: {
@@ -313,7 +254,6 @@ var allTheLetters = map[machine.Pin][]Letter{
 			Offset:     0,
 			Count:      14,
 			SinceBlink: 4,
-			WaitTime:   time.Millisecond * 260,
 		},
 		{
 			Identifier: "C2",
@@ -321,7 +261,6 @@ var allTheLetters = map[machine.Pin][]Letter{
 			Offset:     14,
 			Count:      11,
 			SinceBlink: 8,
-			WaitTime:   time.Millisecond * 265,
 		},
 	},
 }
